@@ -5,10 +5,9 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
-using System.Threading;
 using RDR2.Native;
-using System.IO;
 using System.Linq;
+using RDR2.Math;
 
 namespace Lockhart {
 	public class Lockhart : Script {
@@ -23,14 +22,31 @@ namespace Lockhart {
 		private int inPhotoDeadEyeTill = 0;
 		private int restorePlayer = 0;
 		private float defaultBlendRatio = 0.0f;
-		
+		private int photosPerRoll = 6;
+		private int currentPhotosRemaining = 6;
+
+		private int filmAdvanceDuration = 3000;
+		private int filmReloadDuration = 10000;
+		private int filmAdvanceTimer = 0;
+		private bool filmIsAdvanced = true;
+		private List<int> cameraWindAudioTimer;
+
+		private int flashDuration = 600;
+		private int flashDurationTimer = 0;
+		private int flashDelay = 400;
+		private int flashDelayTimer = 0;
+		private bool waitingForFlash = false;
+
+		private bool useFlash = false;
+
 
 		/* Sound stuff */
 		private bool is_soundset_playing = false;
 		private Dictionary<string, int> soundTimeouts = new Dictionary<string, int>();
 
 		public Lockhart() {
-
+			Audio.PrepareSoundset("CAMERA_SOUNDSET");
+			Audio.PrepareSoundset("MASON_PHOTO_SOUNDSET");
 			defaultBlendRatio = RDR2.Native.Function.Call<float>(0x8517D4A6CA8513ED, PLAYER.PLAYER_PED_ID());
 
 			Tick += OnTick;
@@ -40,10 +56,10 @@ namespace Lockhart {
 		}
 
 		private void OnTick(object sender, EventArgs evt) {
-			Audio.PrepareSoundset("CAMERA_SOUNDSET");
+
 			_debug = string.Empty;
 
-			AddDebugMessage(() => $"Blend ratio; {defaultBlendRatio}");
+			AddDebugMessage(() => $"Blend ratio; {defaultBlendRatio}\n");
 
 			if (Game.GameTime >= restorePlayer) {
 				Game.Player.Ped.IsVisible = true;
@@ -58,11 +74,9 @@ namespace Lockhart {
 			defaultBlendRatio = RDR2.Native.Function.Call<float>(0x8517D4A6CA8513ED, PLAYER.PLAYER_PED_ID());
 			if (Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA" && pressedKeys.Any(k => k == Keys.W || k == Keys.A || k == Keys.D || k == Keys.S)) {
 				if (pressedKeys.Contains(Keys.ShiftKey)) {
-					AddDebugMessage(() => $"sprinting");
 					PED.SET_PED_MAX_MOVE_BLEND_RATIO(PLAYER.PLAYER_PED_ID(), 3f);
 					PED.SET_PED_MIN_MOVE_BLEND_RATIO(PLAYER.PLAYER_PED_ID(), 3f);
 				} else {
-					AddDebugMessage(() => $"Moving");
 					PED.SET_PED_MAX_MOVE_BLEND_RATIO(PLAYER.PLAYER_PED_ID(), 1f);
 					PED.SET_PED_MIN_MOVE_BLEND_RATIO(PLAYER.PLAYER_PED_ID(), 0f);
 				}
@@ -71,12 +85,36 @@ namespace Lockhart {
 				PED.SET_PED_MIN_MOVE_BLEND_RATIO(PLAYER.PLAYER_PED_ID(), 0f);
 			}
 
+			if (waitingForFlash && flashDelayTimer <= Game.GameTime) {
+				AddDebugMessage(() => $"Waiting for flash: {waitingForFlash}\n");
+				SnapShot();
+				waitingForFlash = false;
+			}
 
+			if (Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA") {
+				AddDebugMessage(() => $"{currentPhotosRemaining}/{photosPerRoll}\n");
+				AddDebugMessage(() => $"Camera Ready: {filmIsAdvanced}\n");
+				AddDebugMessage(() => $"Use Flash: {useFlash}\n");
+			}
 
 			AddDebugMessage(() => $"Keys: {string.Join(", ", pressedKeys)}\n");
 
 			//Game.DisableControlThisFrame(eInputType.CameraHandheldUse);
 			Game.DisableControlThisFrame(eInputType.CameraSelfie);
+
+			if (!filmIsAdvanced) {
+				if (filmAdvanceTimer <= Game.GameTime) {
+					EndFilmAdvance();
+				} else if (cameraWindAudioTimer.Any(t => t <= Game.GameTime)) {
+					PlaySound("CAMERA_SOUNDSET", "Wind_On_Film", 500);
+					cameraWindAudioTimer.Remove(cameraWindAudioTimer.FirstOrDefault(t => t <= Game.GameTime));
+				}
+			}
+
+
+			Flash();
+
+
 
 
 			foreach (var soundTimeout in soundTimeouts) {
@@ -95,12 +133,14 @@ namespace Lockhart {
 		}
 
 
-		private string soundset_ref = "ABIGAIL_3_SOUNDSET";
-		private string soundset_name = "Camera_Flash";
-
 		private void OnKeyDown(object sender, KeyEventArgs e) {
 			if (!pressedKeys.Contains(e.KeyCode)) {
 				pressedKeys.Add(e.KeyCode);
+			}
+
+
+			if (Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA" && e.KeyCode == Keys.F) {
+				useFlash = !useFlash;
 			}
 
 			//(Keyboard Only)
@@ -131,38 +171,99 @@ namespace Lockhart {
 			}
 
 			/*
-		["CAMERA_SOUNDSET"] = {
-      "Change_Expression",
-      "Change_Pose",
-      "CLICK",
-      "Collapse_Camera",
-      "DOF_Change",
-      "Expand_Camera",
-      "Place_Tripod",
-      "Remove_Tripod",
-      "Take_Photo",
-      "Wind_On_Film",
-      "Zoom_In",
-      "Zoom_Out",
-    },
+				["CAMERA_SOUNDSET"] = {
+			  "Change_Expression",
+			  "Change_Pose",
+			  "CLICK",
+			  "Collapse_Camera",
+			  "DOF_Change",
+			  "Expand_Camera",
+			  "Place_Tripod",
+			  "Remove_Tripod",
+			  "Take_Photo",
+			  "Wind_On_Film",
+			  "Zoom_In",
+			  "Zoom_Out",
+			},
 			*/
 
 			//Shift + ?
 			//Use X-Mouse to send keyboard combo with every left mouse click
 			if (pressedKeys.Contains(Keys.ShiftKey) && e.KeyCode == Keys.OemQuestion && Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA") {
-				Game.Player.Ped.IsVisible = false;
-				RDR2.Native.GRAPHICS.FREE_MEMORY_FOR_HIGH_QUALITY_PHOTO();
-				RDR2.Native.GRAPHICS.BEGIN_TAKE_HIGH_QUALITY_PHOTO();
-				RDR2.Native.GRAPHICS.SAVE_HIGH_QUALITY_PHOTO(0);
-				restorePlayer = Game.GameTime + 50;
-				inPhotoDeadEyeTill = 0;
-				PlaySound("CAMERA_SOUNDSET", "CLICK", 300);
+				if (filmIsAdvanced) {
 
+					if (useFlash) {
+						flashDurationTimer = Game.GameTime + flashDuration;
+						PlaySound("MASON_PHOTO_SOUNDSET", "Camera_Flash", 600);
+						waitingForFlash = true;
+						flashDelayTimer = Game.GameTime + flashDelay;
+						/* Snap will happen in main loop */
+					} else {
+						SnapShot();
+					}
+				} else {
+					RDR2.UI.Screen.DisplaySubtitle($"Camera not ready");
+				}
 			}
 		}
 
 		private void OnKeyUp(object sender, KeyEventArgs e) {
 			pressedKeys.Remove(e.KeyCode);
+		}
+
+
+		private void BeginFilmAdvanceOrReload() {
+			currentPhotosRemaining--;
+			filmIsAdvanced = false;
+			if (currentPhotosRemaining > 0) {
+				filmAdvanceTimer = Game.GameTime + filmAdvanceDuration;
+				cameraWindAudioTimer = new List<int> {
+					Game.GameTime + 1000,
+					Game.GameTime + 2000
+				};
+			} else {
+				filmAdvanceTimer = Game.GameTime + filmReloadDuration;
+				cameraWindAudioTimer = new List<int> {
+					Game.GameTime + 1000,
+					Game.GameTime + 2000,
+					Game.GameTime + 3000,
+					Game.GameTime + 4000,
+					Game.GameTime + 5000,
+					Game.GameTime + 6000,
+					Game.GameTime + 7000,
+					Game.GameTime + 8000,
+					Game.GameTime + 9000
+				};
+			}
+		}
+
+		private void EndFilmAdvance() {
+			filmIsAdvanced = true;
+			PlaySound("CAMERA_SOUNDSET", "Collapse_Camera", 300);
+			if (currentPhotosRemaining == 0) {
+				currentPhotosRemaining = photosPerRoll;
+			}
+		}
+
+		private void SnapShot() {
+			RDR2.UI.Screen.DisplaySubtitle($"Snapshot at {Game.GameTime}");
+			Game.Player.Ped.IsVisible = false;
+			RDR2.Native.GRAPHICS.FREE_MEMORY_FOR_HIGH_QUALITY_PHOTO();
+			RDR2.Native.GRAPHICS.BEGIN_TAKE_HIGH_QUALITY_PHOTO();
+			RDR2.Native.GRAPHICS.SAVE_HIGH_QUALITY_PHOTO(0);
+			restorePlayer = Game.GameTime + 50;
+			inPhotoDeadEyeTill = 0;
+			if (!useFlash) {
+				PlaySound("MASON_PHOTO_SOUNDSET", "CAMERA_CLICK", 300);
+			}
+
+			BeginFilmAdvanceOrReload();
+		}
+
+		private void Flash() {
+			if (useFlash && flashDurationTimer >= Game.GameTime) {
+				GRAPHICS.DRAW_LIGHT_WITH_RANGE(ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(PLAYER.PLAYER_PED_ID(), .5f, 0f, 1f), 229, 198, 137, 50f, 20f);
+			}
 		}
 
 		private void PlaySound(string soundset_ref, string soundset_name, int soundTimeOutLength) {
