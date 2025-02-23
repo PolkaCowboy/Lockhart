@@ -14,7 +14,7 @@ namespace Lockhart {
 		/* Debug */
 
 		private string _debug;
-		private bool showDebug = true;
+		private bool showDebug = false;
 		private List<Keys> pressedKeys = new List<Keys>();
 
 		/* Mod */
@@ -38,6 +38,7 @@ namespace Lockhart {
 		private bool waitingForFlash = false;
 
 		private bool useFlash = false;
+		private int flashPower = 0;
 
 
 		/* Sound stuff */
@@ -91,10 +92,26 @@ namespace Lockhart {
 				waitingForFlash = false;
 			}
 
+			/* HUD */
+
 			if (Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA") {
 				AddDebugMessage(() => $"{currentPhotosRemaining}/{photosPerRoll}\n");
 				AddDebugMessage(() => $"Camera Ready: {filmIsAdvanced}\n");
 				AddDebugMessage(() => $"Use Flash: {useFlash}\n");
+				AddDebugMessage(() => $"Flash Power: {flashPower}");
+				AddDebugMessage(() => $"Res: {RDR2.UI.Screen.Width} x {RDR2.UI.Screen.Width}\n");
+
+				//TextElement CameraHud = new TextElement($"{currentPhotosRemaining}", new PointF(RDR2.UI.Screen.Width - 50f, 50.0f), 0.55f, Color.WhiteSmoke, Alignment.Right, true, true);
+				//TextElement flashStatus = new TextElement($"{useFlash}", new PointF(RDR2.UI.Screen.Width - 50f, 100.0f), 0.25f, useFlash ? Color.Yellow : Color.DarkGray, Alignment.Right, true, true);
+				//CameraHud.Draw();
+				//flashStatus.Draw();
+
+				ContainerElement hudy = new ContainerElement(new Point((int)RDR2.UI.Screen.Width - 250, 50), new SizeF(200f, 300f));
+				hudy.Items.Add(new TextElement($"{(currentPhotosRemaining > 0 ? currentPhotosRemaining.ToString() : "R")}", new Point(135, 0), 0.55f, filmIsAdvanced ? Color.WhiteSmoke : Color.DarkGray, Alignment.Right, true, true));
+				hudy.Items.Add(new TextElement($"F{flashPower}", new Point(160, 0), 0.55f, flashPower > 0 ? Color.Yellow : Color.DarkGray, Alignment.Right, true, true));
+				hudy.Draw();
+
+
 			}
 
 			AddDebugMessage(() => $"Keys: {string.Join(", ", pressedKeys)}\n");
@@ -110,6 +127,7 @@ namespace Lockhart {
 					cameraWindAudioTimer.Remove(cameraWindAudioTimer.FirstOrDefault(t => t <= Game.GameTime));
 				}
 			}
+
 
 
 			Flash();
@@ -140,7 +158,11 @@ namespace Lockhart {
 
 
 			if (Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA" && e.KeyCode == Keys.F) {
-				useFlash = !useFlash;
+				if (flashPower == 3) {
+					flashPower = 0;
+				} else {
+					flashPower++;
+				}
 			}
 
 			//(Keyboard Only)
@@ -192,7 +214,7 @@ namespace Lockhart {
 			if (pressedKeys.Contains(Keys.ShiftKey) && e.KeyCode == Keys.OemQuestion && Game.Player.Ped.Weapons.Current.Name == "WEAPON_KIT_CAMERA") {
 				if (filmIsAdvanced) {
 
-					if (useFlash) {
+					if (flashPower > 0) {
 						flashDurationTimer = Game.GameTime + flashDuration;
 						PlaySound("MASON_PHOTO_SOUNDSET", "Camera_Flash", 600);
 						waitingForFlash = true;
@@ -246,14 +268,16 @@ namespace Lockhart {
 		}
 
 		private void SnapShot() {
+			if (showDebug) { 
 			RDR2.UI.Screen.DisplaySubtitle($"Snapshot at {Game.GameTime}");
+			}
 			Game.Player.Ped.IsVisible = false;
 			RDR2.Native.GRAPHICS.FREE_MEMORY_FOR_HIGH_QUALITY_PHOTO();
 			RDR2.Native.GRAPHICS.BEGIN_TAKE_HIGH_QUALITY_PHOTO();
 			RDR2.Native.GRAPHICS.SAVE_HIGH_QUALITY_PHOTO(0);
 			restorePlayer = Game.GameTime + 50;
 			inPhotoDeadEyeTill = 0;
-			if (!useFlash) {
+			if (flashPower == 0) {
 				PlaySound("MASON_PHOTO_SOUNDSET", "CAMERA_CLICK", 300);
 			}
 
@@ -261,8 +285,8 @@ namespace Lockhart {
 		}
 
 		private void Flash() {
-			if (useFlash && flashDurationTimer >= Game.GameTime) {
-				GRAPHICS.DRAW_LIGHT_WITH_RANGE(ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(PLAYER.PLAYER_PED_ID(), .5f, 0f, 1f), 229, 198, 137, 50f, 20f);
+			if (flashPower > 0 && flashDurationTimer >= Game.GameTime) {
+				GRAPHICS.DRAW_LIGHT_WITH_RANGE(ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(PLAYER.PLAYER_PED_ID(), .5f, 0f, 1f), 229, 198, 137, 25f * flashPower, 20f);
 			}
 		}
 
